@@ -25,11 +25,65 @@ export type Topic = {
   param?: string;
   parent: number;
   levels: Level[];
+  announcement_html?: string;
+  announcement_md?: string;
+  description_html?: string;
+  description_md?: string;
 };
+
+export type TopicDescription = {
+  id: number;
+  description_html: string;
+  description_md: string;
+}
 
 function findPostById(id: number, posts: Post[]) {
   return posts.find((post) => post.id === id);
 }
+
+/**
+ * board-topics.html contains top level descriptions. Each topic has the following format:
+ * <!--Top: 2593-->
+ * <tr bgcolor="#f5f5ff">
+ * <td valign=top nowrap>
+ * <img name="img2593" height=11 width=28 border=0 src="http://saku.bbs.fi/discus/icons/tree_j.gif" alt="">
+ * <img src="http://saku.bbs.fi/discus/icons/tree_n.gif" height=16 width=20>
+ * </td>
+ * <td valign=top><font size="2" face="Verdana,Arial,Helvetica">
+ * <a href="http://saku.bbs.fi/discus/messages/2593/2593.html?1677607098"><b>Yleinen keskustelu</b></a>
+ * <br><font size=1><!--Descr-->Yleinen Amiga-maailmaan ja yhteensopiviin laitteisiin liittyv&auml; keskustelu.<!--/Descr--></font>
+ * </td>
+ * <td align=right valign=top nowrap><font size="2" face="Verdana,Arial,Helvetica">11467</font></td>
+ * <td align=right valign=top nowrap><font size="2" face="Verdana,Arial,Helvetica">1025</font></td>
+ * <td nowrap valign=top align=center><font size="2" face="Verdana,Arial,Helvetica">28. 2.2023 19:58</font></td>
+ * <td align=left valign=top nowrap><font size="2" face="Verdana,Arial,Helvetica">jPV</font></td>
+ * </tr>
+ * <!--/Top-->
+ * 
+ * From these we will extract <!--Descr-->Descrtipion<!--/Descr-->
+ */
+const parseSubTopicsFromText = (text: string): TopicDescription[] => {
+  const topics: TopicDescription[] = [];
+  const topicRegex = /<!--Top: (\d+)-->(.|\s)*?<!--\/Top-->/g;
+  let match = topicRegex.exec(text);
+  while (match) {
+    const topicId = parseInt(match[1]);
+    const topicDescription = match[0].match(/<!--Descr-->(.|\s)*?<!--\/Descr-->/g);
+    if (topicDescription) {
+      const descriptionHtml = topicDescription[0].replace(/<!--Descr-->/g, "").replace(/<!--\/Descr-->/g, "");
+      const descriptionMd = td.turndown(descriptionHtml);
+      topics.push({
+        id: topicId,
+        description_html: descriptionHtml,
+        description_md: descriptionMd,
+      });
+    }
+    match = topicRegex.exec(text);
+  }
+  return topics;
+};
+
+
 
 /**
  * Parse html file for contents
@@ -42,6 +96,10 @@ function findPostById(id: number, posts: Post[]) {
  * <!--Properties: icons=1;hidden=0--> # Properties
  * <!--Param: MessagesAdd--> # Action to perform for example Sublist, MessagesAdd
  * <!--Parent: 3924--> # Parent topic id
+ * <!--Announcement-->
+ * <b>Torin toimintaohje:</b> Jätä ilmoitus jollekin allaolevista osastoista. Muista laittaa yhteystietosi mukaan ilmoitukseesi, sillä varsinainen kaupankäynti tulisi hoitaa yksityisesti. Vältä ilmoitusten turhaa kommentointia, muut osastot ovat softa/laitekeskustelua varten. <BR> <BR>Jos jokin ilmoitus herättää kysymyksiä myytävään/ostettavaan tuotteeseen liittyen, ota ensisijaisesti yhteyttä suoraan myyjään. Voit tehdä siitä myös uuden ketjun sopivalle osastolle, mikäli koet että keskustelusta on hyötyä muillekin lukijoille. Muistathan, että Tori-osaston ketjut poistetaan 12 kk:n kuluttua. <BR> <BR>Suomen lain tai hyvien tapojen vastaiset ilmoitukset poistetaan, joten ethän kauppaa piraattituotteita.  <BR> <BR><font color="ff0000"><b>Huuto.netissä myynnissä oleville kohteille on oma osionsa</b></font>, joten jätäthän ilmoituksesi sinne, mikäli myymäsi tuotteet ovat myynnissä huuto.netissä. <BR> <BR><font color="ff0000">HUOM! Kun tavara on myyty, ostettu yms., laita ilmoituksesi viestiketjuun uusi viesti, jossa mainitset asiasta, niin moderaattorit poistavat ilmoituksesi. Yli 12 kk vanhat viestiketjut poistetaan.</font>
+ * <!--/Announcement-->
+ * 
  */
 
 const parseTopicFromText = (text: string): Topic => {
@@ -55,6 +113,7 @@ const parseTopicFromText = (text: string): Topic => {
   const propertiesRegex = /<!--Properties: (.+?)-->/;
   const paramRegex = /<!--Param: (.+?)-->/;
   const parentRegex = /<!--Parent: (\d+)-->/;
+  const announcementRegex = /<!--Announcement-->([\s\S]*?)<!--\/Announcement-->/;
 
   const topic = topicRegex.exec(text);
   const me = meRegex.exec(text);
@@ -66,6 +125,7 @@ const parseTopicFromText = (text: string): Topic => {
   const properties = propertiesRegex.exec(text);
   const param = paramRegex.exec(text);
   const parent = parentRegex.exec(text);
+  const announcement = announcementRegex.exec(text);
 
   const mainTopic = topic && topic[2] || "";
   const mainTopicId = topic && Number(topic[1]) || 0;
@@ -119,7 +179,9 @@ const parseTopicFromText = (text: string): Topic => {
     properties: properties && properties[1] || undefined,
     param: param && param[1] || undefined,
     parent: parent && Number(parent[1]) || 0,
-    levels
+    levels,
+    announcement_html: announcement && announcement[1] || undefined,
+    announcement_md: announcement && announcement[1] && td.turndown(announcement[1]) || undefined,
   };
 };
 
@@ -181,10 +243,12 @@ export const convertFile = async (filename: string) => {
   const text = await Deno.readTextFile(filename);
   const posts = parsePostsFromText(text);
   const topic = parseTopicFromText(text);
+  const subTopics = parseSubTopicsFromText(text);
 
   return {
     topic,
-    posts
+    posts,
+    subTopics,
   }
 };
 
